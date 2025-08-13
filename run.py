@@ -25,7 +25,7 @@ def play_game():
     print("Type 'quit' to exit, 'help' for help\n")
     
     board = chess.Board()
-    engine = HybridEngine(model_name='9M', max_depth=4, time_limit=15.0)
+    engine = HybridEngine(model_name='9M_state_value', max_depth=4, time_limit=15.0)
     
     while not board.is_game_over():
         print(f"Position: {board.fen()}")
@@ -180,7 +180,8 @@ def main():
                                default='rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',
                                help='FEN position to analyze')
     analyze_parser.add_argument('--depth', type=int, default=4, help='Search depth')
-    analyze_parser.add_argument('--model', default='9M', choices=['9M', '136M', '270M'],
+    analyze_parser.add_argument('--model', default='9M_state_value', 
+                               choices=['9M_state_value', '9M', '136M', '270M'],
                                help='Transformer model to use')
     
     # Demo command
@@ -194,8 +195,8 @@ def main():
     
     # Match command
     match_parser = subparsers.add_parser('match', help='Engine vs engine match')
-    match_parser.add_argument('--model1', default='9M', help='First engine model')
-    match_parser.add_argument('--model2', default='9M', help='Second engine model')
+    match_parser.add_argument('--model1', default='9M_state_value', help='First engine model')
+    match_parser.add_argument('--model2', default='9M_state_value', help='Second engine model')
     match_parser.add_argument('--depth1', type=int, default=3, help='First engine depth')
     match_parser.add_argument('--depth2', type=int, default=4, help='Second engine depth')
     match_parser.add_argument('--games', type=int, default=3, help='Number of games')

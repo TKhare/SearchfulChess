@@ -25,6 +25,93 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../../searchless_chess/
 from engines import constants as engine_constants
 from engines.neural_engines import ActionValueEngine, StateValueEngine
 from engines.engine import get_ordered_legal_moves
+from engines import neural_engines
+from searchless_chess.src import utils
+from searchless_chess.src import transformer
+from searchless_chess.src import training_utils
+from searchless_chess.src import tokenizer
+import jax.random as jrandom
+
+
+def _build_state_value_engine(
+    model_name: str,
+    checkpoint_step: int = -1,
+) -> neural_engines.StateValueEngine:
+    """Build a state value engine for the given model."""
+    
+    # Model configurations (same as action_value but with state_value policy)
+    match model_name:
+        case '9M':
+            num_layers = 8
+            embedding_dim = 256
+            num_heads = 8
+        case '136M':
+            num_layers = 8
+            embedding_dim = 1024
+            num_heads = 8
+        case '270M':
+            num_layers = 16
+            embedding_dim = 1024
+            num_heads = 8
+        case 'local':
+            num_layers = 4
+            embedding_dim = 64
+            num_heads = 4
+        case _:
+            raise ValueError(f'Unknown model: {model_name}')
+
+    num_return_buckets = 128
+    output_size = num_return_buckets  # state_value policy
+
+    predictor_config = transformer.TransformerConfig(
+        vocab_size=utils.NUM_ACTIONS,
+        output_size=output_size,
+        pos_encodings=transformer.PositionalEncodings.LEARNED,
+        max_sequence_length=tokenizer.SEQUENCE_LENGTH + 2,
+        num_heads=num_heads,
+        num_layers=num_layers,
+        embedding_dim=embedding_dim,
+        apply_post_ln=True,
+        apply_qk_layernorm=False,
+        use_causal_mask=False,
+    )
+
+    predictor = transformer.build_transformer_predictor(config=predictor_config)
+    
+    # Look for state_value checkpoint
+    checkpoint_dir = os.path.join(
+        os.getcwd(),
+        f'../checkpoints/{model_name}_state_value',
+    )
+    
+    # Fallback to regular model directory if state_value doesn't exist
+    if not os.path.exists(checkpoint_dir):
+        checkpoint_dir = os.path.join(
+            os.getcwd(),
+            f'../checkpoints/{model_name}',
+        )
+    
+    params = training_utils.load_parameters(
+        checkpoint_dir=checkpoint_dir,
+        params=predictor.initial_params(
+            rng=jrandom.PRNGKey(1),
+            targets=np.ones((1, 1), dtype=np.uint32),
+        ),
+        step=checkpoint_step,
+    )
+    
+    _, return_buckets_values = utils.get_uniform_buckets_edges_values(
+        num_return_buckets
+    )
+    
+    return neural_engines.StateValueEngine(
+        return_buckets_values=return_buckets_values,
+        predict_fn=neural_engines.wrap_predict_fn(
+            predictor=predictor,
+            params=params,
+            batch_size=1,
+        ),
+    )
 
 
 @dataclass
@@ -73,35 +160,33 @@ class TransformerEvaluator:
         analysis = self.neural_engine.analyse(board)
         
         # Handle different engine types
-        if isinstance(self.neural_engine, ActionValueEngine):
+        if isinstance(self.neural_engine, StateValueEngine):
+            # StateValueEngine returns 'current_log_probs' for direct position evaluation
+            current_log_probs = analysis['current_log_probs']
+            current_probs = np.exp(current_log_probs)
+            evaluation = np.inner(current_probs, self.neural_engine._return_buckets_values)
+            
+        elif isinstance(self.neural_engine, ActionValueEngine):
             # ActionValueEngine returns 'log_probs' for each legal move
+            # Convert to position value by taking best move value
             return_buckets_log_probs = analysis['log_probs']
             return_buckets_probs = np.exp(return_buckets_log_probs)
             win_probs = np.inner(return_buckets_probs, self.neural_engine._return_buckets_values)
-            
-            # Take the best move's evaluation as position value
             evaluation = np.max(win_probs)
             
-        elif hasattr(analysis, 'current_log_probs') or 'current_log_probs' in analysis:
-            # StateValueEngine returns 'current_log_probs' for position evaluation
-            current_log_probs = analysis['current_log_probs']
-            current_probs = np.exp(current_log_probs)
-            
-            # Convert bucket probabilities to win probability
-            evaluation = np.inner(current_probs, self.neural_engine._return_buckets_values)
-            
         else:
-            # Fallback: try to use any log_probs available
-            if 'log_probs' in analysis:
+            # Generic fallback
+            if 'current_log_probs' in analysis:
+                current_log_probs = analysis['current_log_probs']
+                current_probs = np.exp(current_log_probs)
+                evaluation = np.inner(current_probs, self.neural_engine._return_buckets_values)
+            elif 'log_probs' in analysis:
                 log_probs = analysis['log_probs']
+                probs = np.exp(log_probs)
                 if log_probs.ndim > 1:
-                    # If multiple moves, take the best
-                    probs = np.exp(log_probs)
                     win_probs = np.inner(probs, self.neural_engine._return_buckets_values)
                     evaluation = np.max(win_probs)
                 else:
-                    # Single evaluation
-                    probs = np.exp(log_probs)
                     evaluation = np.inner(probs, self.neural_engine._return_buckets_values)
             else:
                 raise ValueError(f"Unknown analysis format: {list(analysis.keys())}")
@@ -130,7 +215,7 @@ class HybridEngine:
     
     def __init__(
         self,
-        model_name: str = '9M',
+        model_name: str = '9M_state_value',
         max_depth: int = 6,
         time_limit: Optional[float] = None,
         use_transposition_table: bool = True,
@@ -140,7 +225,8 @@ class HybridEngine:
         Initialize the hybrid engine.
         
         Args:
-            model_name: DeepMind model to use ('9M', '136M', '270M')
+            model_name: DeepMind model to use ('9M_state_value', '9M', '136M', '270M')
+                       State value models are preferred for hybrid search
             max_depth: Maximum search depth
             time_limit: Maximum time per move in seconds
             use_transposition_table: Whether to use transposition table
@@ -154,13 +240,37 @@ class HybridEngine:
         
         # Load the neural engine
         print(f"Loading {model_name} transformer model...")
-        engine_builder = engine_constants.ENGINE_BUILDERS[model_name]
-        base_neural_engine = engine_builder()
         
-        # Store the neural engine (which could be ActionValueEngine or StateValueEngine)
+        # Try to use state value version first (better for hybrid search)
+        if model_name.endswith('_state_value'):
+            base_model = model_name.replace('_state_value', '')
+            try:
+                base_neural_engine = _build_state_value_engine(base_model)
+                print(f"Using StateValueEngine for {base_model}")
+            except Exception as e:
+                print(f"Failed to load state value engine: {e}")
+                print("Falling back to action value engine...")
+                engine_builder = engine_constants.ENGINE_BUILDERS[base_model]
+                base_neural_engine = engine_builder()
+        else:
+            # Check if we have existing engine builders
+            if model_name in engine_constants.ENGINE_BUILDERS:
+                engine_builder = engine_constants.ENGINE_BUILDERS[model_name]
+                base_neural_engine = engine_builder()
+            else:
+                # Try to build state value version
+                try:
+                    base_neural_engine = _build_state_value_engine(model_name)
+                    print(f"Using StateValueEngine for {model_name}")
+                except Exception:
+                    # Fallback to action value
+                    engine_builder = engine_constants.ENGINE_BUILDERS[model_name]
+                    base_neural_engine = engine_builder()
+        
+        # Store the neural engine
         self.neural_engine = base_neural_engine
         
-        # Create evaluator wrapper - we'll adapt to work with any neural engine type
+        # Create evaluator wrapper
         self.evaluator = TransformerEvaluator(base_neural_engine)
         
         # Search components

@@ -21,9 +21,9 @@ class TestHybridEngine(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the test class with a shared engine instance."""
-        # Use 9M model for faster testing
-        print("Loading 9M model for testing...")
-        cls.engine = HybridEngine(model_name='9M', max_depth=3, time_limit=10.0)
+        # Use 9M state value model for faster testing
+        print("Loading 9M state value model for testing...")
+        cls.engine = HybridEngine(model_name='9M_state_value', max_depth=3, time_limit=10.0)
     
     def test_engine_initialization(self):
         """Test that the engine initializes correctly."""
@@ -122,7 +122,7 @@ class TestHybridEngine(unittest.TestCase):
         board = chess.Board()
         
         # Create engine with very short time limit
-        fast_engine = HybridEngine(model_name='9M', max_depth=10, time_limit=1.0)
+        fast_engine = HybridEngine(model_name='9M_state_value', max_depth=10, time_limit=1.0)
         
         move, evaluation, stats = fast_engine.search(board)
         
@@ -149,9 +149,15 @@ class TestTransformerEvaluator(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         """Set up the test class."""
-        from engines import constants as engine_constants
-        engine_builder = engine_constants.ENGINE_BUILDERS['9M']
-        neural_engine = engine_builder()
+        # Create a state value engine for testing
+        from hybrid_engine import _build_state_value_engine
+        try:
+            neural_engine = _build_state_value_engine('9M')
+        except Exception:
+            # Fallback to action value engine
+            from engines import constants as engine_constants
+            engine_builder = engine_constants.ENGINE_BUILDERS['9M']
+            neural_engine = engine_builder()
         cls.evaluator = TransformerEvaluator(neural_engine)
     
     def test_evaluation_consistency(self):
@@ -202,7 +208,7 @@ def run_performance_test():
     """Run a performance test to measure engine speed."""
     print("\n=== Performance Test ===")
     
-    engine = HybridEngine(model_name='9M', max_depth=4, time_limit=30.0)
+    engine = HybridEngine(model_name='9M_state_value', max_depth=4, time_limit=30.0)
     board = chess.Board()
     
     import time

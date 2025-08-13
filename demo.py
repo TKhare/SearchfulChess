@@ -54,8 +54,8 @@ def analyze_famous_positions():
     print("=== Hybrid Chess Engine Demo ===\n")
     print("Analyzing famous chess positions with transformer evaluation...\n")
     
-    # Initialize engine with 9M model at moderate depth
-    engine = HybridEngine(model_name='9M', max_depth=4, time_limit=30.0)
+    # Initialize engine with 9M state value model at moderate depth
+    engine = HybridEngine(model_name='9M_state_value', max_depth=4, time_limit=30.0)
     
     for i, position in enumerate(famous_positions, 1):
         print(f"{i}. {position['name']}")
@@ -110,7 +110,7 @@ def compare_search_depths():
         print(f"Depth {depth}:")
         
         # Create engine for this depth
-        engine = HybridEngine(model_name='9M', max_depth=depth, time_limit=60.0)
+        engine = HybridEngine(model_name='9M_state_value', max_depth=depth, time_limit=60.0)
         
         try:
             start_time = time.time()
@@ -138,7 +138,7 @@ def interactive_mode():
     print("Enter FEN positions to analyze (or 'quit' to exit)")
     print("Press Enter for starting position\n")
     
-    engine = HybridEngine(model_name='9M', max_depth=4, time_limit=30.0)
+    engine = HybridEngine(model_name='9M_state_value', max_depth=4, time_limit=30.0)
     
     while True:
         fen_input = input("FEN> ").strip()

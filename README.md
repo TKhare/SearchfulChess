@@ -71,8 +71,8 @@ python run.py test
 ```python
 from src.hybrid_engine import HybridEngine
 
-# Initialize engine with 9M model
-engine = HybridEngine(model_name='9M', max_depth=4, time_limit=30.0)
+# Initialize engine with 9M state value model (recommended)
+engine = HybridEngine(model_name='9M_state_value', max_depth=4, time_limit=30.0)
 
 # Analyze position
 import chess
@@ -110,7 +110,8 @@ engine = HybridEngine(
 
 | Model | Parameters | Eval Speed | Strength Boost | Best Use Case |
 |-------|------------|------------|----------------|---------------|
-| 9M    | 9M         | ~100 evals/sec | +8 plies equiv | Fast analysis, testing |
+| 9M_state_value | 9M    | ~200 evals/sec | +8 plies equiv | Fast analysis, testing (recommended) |
+| 9M    | 9M         | ~100 evals/sec | +8 plies equiv | Fast analysis (action value) |
 | 136M  | 136M       | ~20 evals/sec  | +12 plies equiv | Balanced performance |
 | 270M  | 270M       | ~5 evals/sec   | +15 plies equiv | Maximum strength |
 
