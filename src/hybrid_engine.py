@@ -33,13 +33,14 @@ from searchless_chess.src import tokenizer
 import jax.random as jrandom
 
 
-def _build_state_value_engine(
+def _build_neural_engine_fixed_path(
     model_name: str,
-    checkpoint_step: int = -1,
-) -> neural_engines.StateValueEngine:
-    """Build a state value engine for the given model."""
+    policy: str = 'action_value',
+    checkpoint_step: int = 6_400_000,
+) -> neural_engines.NeuralEngine:
+    """Build a neural engine with fixed checkpoint paths."""
     
-    # Model configurations (same as action_value but with state_value policy)
+    # Model configurations
     match model_name:
         case '9M':
             num_layers = 8
@@ -61,7 +62,16 @@ def _build_state_value_engine(
             raise ValueError(f'Unknown model: {model_name}')
 
     num_return_buckets = 128
-    output_size = num_return_buckets  # state_value policy
+    
+    match policy:
+        case 'action_value':
+            output_size = num_return_buckets
+        case 'behavioral_cloning':
+            output_size = utils.NUM_ACTIONS
+        case 'state_value':
+            output_size = num_return_buckets
+        case _:
+            raise ValueError(f'Unknown policy: {policy}')
 
     predictor_config = transformer.TransformerConfig(
         vocab_size=utils.NUM_ACTIONS,
@@ -78,18 +88,12 @@ def _build_state_value_engine(
 
     predictor = transformer.build_transformer_predictor(config=predictor_config)
     
-    # Look for state_value checkpoint
-    checkpoint_dir = os.path.join(
-        os.getcwd(),
-        f'../checkpoints/{model_name}_state_value',
-    )
+    # Fixed checkpoint directory path
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    searchless_dir = os.path.join(current_dir, '../../searchless_chess')
+    checkpoint_dir = os.path.join(searchless_dir, f'checkpoints/{model_name}')
     
-    # Fallback to regular model directory if state_value doesn't exist
-    if not os.path.exists(checkpoint_dir):
-        checkpoint_dir = os.path.join(
-            os.getcwd(),
-            f'../checkpoints/{model_name}',
-        )
+    print(f"Loading from checkpoint: {checkpoint_dir}")
     
     params = training_utils.load_parameters(
         checkpoint_dir=checkpoint_dir,
@@ -104,7 +108,7 @@ def _build_state_value_engine(
         num_return_buckets
     )
     
-    return neural_engines.StateValueEngine(
+    return neural_engines.ENGINE_FROM_POLICY[policy](
         return_buckets_values=return_buckets_values,
         predict_fn=neural_engines.wrap_predict_fn(
             predictor=predictor,
@@ -112,6 +116,30 @@ def _build_state_value_engine(
             batch_size=1,
         ),
     )
+
+
+def _build_state_value_engine(
+    model_name: str,
+    checkpoint_step: int = 6_400_000,
+) -> neural_engines.NeuralEngine:
+    """Build a state value engine for the given model."""
+    
+    # For now, state value engines use the same checkpoints as action value
+    # but with state_value policy. This is a limitation - DeepMind doesn't 
+    # provide separate state value checkpoints.
+    
+    # Check if we have a dedicated state_value checkpoint
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    searchless_dir = os.path.join(current_dir, '../../searchless_chess')
+    state_value_dir = os.path.join(searchless_dir, f'checkpoints/{model_name}_state_value')
+    
+    if os.path.exists(state_value_dir):
+        print(f"Using dedicated state value checkpoint: {state_value_dir}")
+        return _build_neural_engine_fixed_path(model_name, 'state_value', checkpoint_step)
+    else:
+        print(f"No dedicated state value checkpoint found for {model_name}")
+        print("State value engines need separate training. Using action value engine instead.")
+        return _build_neural_engine_fixed_path(model_name, 'action_value', checkpoint_step)
 
 
 @dataclass
@@ -250,22 +278,20 @@ class HybridEngine:
             except Exception as e:
                 print(f"Failed to load state value engine: {e}")
                 print("Falling back to action value engine...")
-                engine_builder = engine_constants.ENGINE_BUILDERS[base_model]
-                base_neural_engine = engine_builder()
+                base_neural_engine = _build_neural_engine_fixed_path(base_model, 'action_value')
         else:
-            # Check if we have existing engine builders
-            if model_name in engine_constants.ENGINE_BUILDERS:
-                engine_builder = engine_constants.ENGINE_BUILDERS[model_name]
-                base_neural_engine = engine_builder()
-            else:
-                # Try to build state value version
-                try:
-                    base_neural_engine = _build_state_value_engine(model_name)
-                    print(f"Using StateValueEngine for {model_name}")
-                except Exception:
-                    # Fallback to action value
+            # Use our fixed path builder instead of the original ENGINE_BUILDERS
+            try:
+                base_neural_engine = _build_neural_engine_fixed_path(model_name, 'action_value')
+                print(f"Using ActionValueEngine for {model_name}")
+            except Exception as e:
+                print(f"Failed to load with fixed path: {e}")
+                # Final fallback to original builders (will likely fail with path issues)
+                if model_name in engine_constants.ENGINE_BUILDERS:
                     engine_builder = engine_constants.ENGINE_BUILDERS[model_name]
                     base_neural_engine = engine_builder()
+                else:
+                    raise ValueError(f"Could not load model {model_name}")
         
         # Store the neural engine
         self.neural_engine = base_neural_engine
