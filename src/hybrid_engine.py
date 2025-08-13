@@ -69,10 +69,12 @@ class TransformerEvaluator:
             self.cache_hits += 1
             return self.cache[fen]
         
-        # Different evaluation methods based on engine type
+        # Get evaluation from neural engine
+        analysis = self.neural_engine.analyse(board)
+        
+        # Handle different engine types
         if isinstance(self.neural_engine, ActionValueEngine):
-            # For ActionValueEngine, we evaluate all moves and take the best one
-            analysis = self.neural_engine.analyse(board)
+            # ActionValueEngine returns 'log_probs' for each legal move
             return_buckets_log_probs = analysis['log_probs']
             return_buckets_probs = np.exp(return_buckets_log_probs)
             win_probs = np.inner(return_buckets_probs, self.neural_engine._return_buckets_values)
@@ -80,21 +82,33 @@ class TransformerEvaluator:
             # Take the best move's evaluation as position value
             evaluation = np.max(win_probs)
             
-        else:
-            # For StateValueEngine, get direct position evaluation
-            analysis = self.neural_engine.analyse(board)
+        elif hasattr(analysis, 'current_log_probs') or 'current_log_probs' in analysis:
+            # StateValueEngine returns 'current_log_probs' for position evaluation
             current_log_probs = analysis['current_log_probs']
             current_probs = np.exp(current_log_probs)
             
             # Convert bucket probabilities to win probability
             evaluation = np.inner(current_probs, self.neural_engine._return_buckets_values)
+            
+        else:
+            # Fallback: try to use any log_probs available
+            if 'log_probs' in analysis:
+                log_probs = analysis['log_probs']
+                if log_probs.ndim > 1:
+                    # If multiple moves, take the best
+                    probs = np.exp(log_probs)
+                    win_probs = np.inner(probs, self.neural_engine._return_buckets_values)
+                    evaluation = np.max(win_probs)
+                else:
+                    # Single evaluation
+                    probs = np.exp(log_probs)
+                    evaluation = np.inner(probs, self.neural_engine._return_buckets_values)
+            else:
+                raise ValueError(f"Unknown analysis format: {list(analysis.keys())}")
         
         # Convert to evaluation score (0-1 -> -1 to 1)
         evaluation = 2 * evaluation - 1
         
-        # No need to flip for black since we want evaluation from current player's perspective
-        # and the neural network should already handle this
-            
         # Cache result
         self.cache[fen] = evaluation
         
